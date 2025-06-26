@@ -20,7 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'hundle_node = ai_formula.hundle_node:main'
+            'hundle_node = ai_formula.hundle_node:main',
+            'gui_display = ai_formula.gui_display:main'
         ],
     },
 )

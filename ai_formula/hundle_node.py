@@ -123,6 +123,13 @@ class HundleNode(Node):
                                     self.twist_msg.linear.x = throttle_normalized * self.linear_gain
                                     self.get_logger().info(f"THROTTLE: raw={raw_val} normalized={throttle_normalized:.3f} linear.x={self.twist_msg.linear.x:.3f}")
                                     
+                                elif abs_event.event.code == ecodes.ABS_Y:
+                                    # リバース（Y軸）: 0-255の範囲
+                                    reverse_normalized = raw_val / 255.0  # 0.0 ～ 1.0
+                                    # リバース時は負の値でバック移動
+                                    self.twist_msg.linear.x = -reverse_normalized * self.linear_gain
+                                    self.get_logger().info(f"REVERSE: raw={raw_val} normalized={reverse_normalized:.3f} linear.x={self.twist_msg.linear.x:.3f}")
+                                    
                     except BlockingIOError:
                         continue
                     except Exception as e:
