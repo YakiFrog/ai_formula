@@ -318,28 +318,46 @@ class HandleInputDisplay(QMainWindow):
                                     )
                                     
                                 elif abs_event.event.code == ecodes.ABS_RZ:
-                                    # ブレーキ: 0-1.0に正規化
-                                    brake_normalized = raw_val / 255.0
-                                    self.signals.brake_changed.emit(brake_normalized)
-                                    self.signals.raw_data_changed.emit(
-                                        f"BRAKE: raw={raw_val} normalized={brake_normalized:.3f}"
-                                    )
+                                    # ブレーキ: デッドゾーンを考慮した処理
+                                    if raw_val < 240:  # ブレーキが踏まれている
+                                        brake_normalized = (240 - raw_val) / 240.0
+                                        self.signals.brake_changed.emit(brake_normalized)
+                                        self.signals.raw_data_changed.emit(
+                                            f"BRAKE: raw={raw_val} normalized={brake_normalized:.3f} (ACTIVE)"
+                                        )
+                                    else:  # ブレーキが離されている
+                                        self.signals.brake_changed.emit(0.0)
+                                        self.signals.raw_data_changed.emit(
+                                            f"BRAKE: raw={raw_val} (INACTIVE)"
+                                        )
                                     
                                 elif abs_event.event.code == ecodes.ABS_Z:
-                                    # スロットル: 0-1.0に正規化
-                                    throttle_normalized = 1.0 - (raw_val / 255.0)
-                                    self.signals.throttle_changed.emit(throttle_normalized)
-                                    self.signals.raw_data_changed.emit(
-                                        f"THROTTLE: raw={raw_val} normalized={throttle_normalized:.3f}"
-                                    )
+                                    # スロットル: デッドゾーンを考慮した処理
+                                    if raw_val < 250:
+                                        throttle_normalized = (250 - raw_val) / 250.0
+                                        self.signals.throttle_changed.emit(throttle_normalized)
+                                        self.signals.raw_data_changed.emit(
+                                            f"THROTTLE: raw={raw_val} normalized={throttle_normalized:.3f}"
+                                        )
+                                    else:
+                                        self.signals.throttle_changed.emit(0.0)
+                                        self.signals.raw_data_changed.emit(
+                                            f"THROTTLE: raw={raw_val} (INACTIVE)"
+                                        )
                                     
                                 elif abs_event.event.code == ecodes.ABS_Y:
-                                    # リバース（Y軸）: 0-1.0に正規化
-                                    reverse_normalized = raw_val / 255.0
-                                    self.signals.reverse_changed.emit(reverse_normalized)
-                                    self.signals.raw_data_changed.emit(
-                                        f"REVERSE: raw={raw_val} normalized={reverse_normalized:.3f}"
-                                    )
+                                    # リバース: デッドゾーンを考慮した処理
+                                    if raw_val < 240:  # リバースが押されている
+                                        reverse_normalized = (240 - raw_val) / 240.0
+                                        self.signals.reverse_changed.emit(reverse_normalized)
+                                        self.signals.raw_data_changed.emit(
+                                            f"REVERSE: raw={raw_val} normalized={reverse_normalized:.3f} (ACTIVE)"
+                                        )
+                                    else:  # リバースが離されている
+                                        self.signals.reverse_changed.emit(0.0)
+                                        self.signals.raw_data_changed.emit(
+                                            f"REVERSE: raw={raw_val} (INACTIVE)"
+                                        )
                                     
                     except BlockingIOError:
                         continue
