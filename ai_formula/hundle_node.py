@@ -1,18 +1,42 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from std_msgs.msg import Float32MultiArray
 import math
 from evdev import InputDevice, categorize, ecodes
 import threading
 import select
 import glob
 import os
+import json
 
 class HundleNode(Node):
     def __init__(self):
         super().__init__('hundle_node')
         self.publisher_ = self.create_publisher(Twist, '/aiformula_control/twist_mux/cmd_vel', 10)
+        
+        # 設定値パブリッシャー（GUI表示用）
+        self.config_publisher_ = self.create_publisher(Float32MultiArray, '/hundle_config', 10)
+        
         self.timer = self.create_timer(0.1, self.timer_callback)
+        
+        # パラメータの宣言と初期化
+        self.declare_parameter('linear_gain', 1.0)
+        self.declare_parameter('steering_max', 2.0)
+        self.declare_parameter('throttle_max', 1.0)
+        self.declare_parameter('reverse_max', 1.0)
+        
+        # パラメータ値を取得
+        self.linear_gain = self.get_parameter('linear_gain').get_parameter_value().double_value
+        self.steering_max = self.get_parameter('steering_max').get_parameter_value().double_value
+        self.throttle_max = self.get_parameter('throttle_max').get_parameter_value().double_value
+        self.reverse_max = self.get_parameter('reverse_max').get_parameter_value().double_value
+        
+        self.angular_gain = 9.42 / 255  # 正規化された値（0-1）に対して適用
+        
+        # 設定ファイルパス
+        self.config_file = os.path.expanduser('~/ros2_ws/hundle_config.json')
+        self.load_config()
         
         # G923ハンドルを自動検出
         self.g923 = self.find_g923_device()
@@ -21,9 +45,7 @@ class HundleNode(Node):
             return
         
         self.get_logger().info(f'Successfully connected to device: {self.g923.name}')
-        
-        self.linear_gain = 1.0
-        self.angular_gain = 9.42 / 255  # 正規化された値（0-1）に対して適用
+        self.get_logger().info(f'Config: steering_max={self.steering_max}, throttle_max={self.throttle_max}, reverse_max={self.reverse_max}')
         
         self.twist_msg = Twist()
         self.twist_msg.linear.x = 0.0
@@ -38,6 +60,51 @@ class HundleNode(Node):
         self.running = True
         self.input_thread = threading.Thread(target=self.handle_input, daemon=True)  
         self.input_thread.start()
+        
+        # 設定更新用タイマー（10秒ごとに設定ファイルをチェック）
+        self.config_timer = self.create_timer(10.0, self.check_config_update)
+    
+    def load_config(self):
+        """設定ファイルから設定を読み込み"""
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                    self.steering_max = config.get('steering_max', self.steering_max)
+                    self.throttle_max = config.get('throttle_max', self.throttle_max)
+                    self.reverse_max = config.get('reverse_max', self.reverse_max)
+                    self.get_logger().info(f'Config loaded: steering_max={self.steering_max}, throttle_max={self.throttle_max}, reverse_max={self.reverse_max}')
+        except Exception as e:
+            self.get_logger().warn(f'Failed to load config: {e}')
+    
+    def save_config(self):
+        """設定ファイルに設定を保存"""
+        try:
+            config = {
+                'steering_max': self.steering_max,
+                'throttle_max': self.throttle_max,
+                'reverse_max': self.reverse_max
+            }
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            self.get_logger().warn(f'Failed to save config: {e}')
+    
+    def check_config_update(self):
+        """設定ファイルの更新をチェック"""
+        old_values = (self.steering_max, self.throttle_max, self.reverse_max)
+        self.load_config()
+        new_values = (self.steering_max, self.throttle_max, self.reverse_max)
+        
+        if old_values != new_values:
+            self.get_logger().info('Config updated from file')
+            self.publish_config()
+    
+    def publish_config(self):
+        """現在の設定値をパブリッシュ"""
+        config_msg = Float32MultiArray()
+        config_msg.data = [float(self.steering_max), float(self.throttle_max), float(self.reverse_max)]
+        self.config_publisher_.publish(config_msg)
     
     def find_g923_device(self):
         """G923/G29ハンドルデバイスを自動検出"""
@@ -102,18 +169,17 @@ class HundleNode(Node):
                                 raw_val = abs_event.event.value
                                 
                                 if abs_event.event.code == ecodes.ABS_X:
-                                    # ステアリング: G923/G29の実際の値範囲に基づいて正規化
-                                    # G923/G29のステアリング範囲は通常0-65535 (16bit)
+                                    # ステアリング: 設定された最大値を適用
                                     steering_normalized = (raw_val - 32768) / 32768.0  # -1.0 ～ 1.0
                                     
                                     # 指数関数的に変化させる（符号を保持）
                                     sign = 1 if steering_normalized >= 0 else -1
                                     abs_steering = abs(steering_normalized)
-                                    # 指数関数的変化: y = x^2 で滑らかな変化、最大値2
-                                    exponential_steering = sign * (abs_steering ** 2) * 2.0
+                                    # 指数関数的変化: y = x^2 で滑らかな変化、設定された最大値を適用
+                                    exponential_steering = sign * (abs_steering ** 2) * self.steering_max
                                     
                                     self.twist_msg.angular.z = -exponential_steering  # 符号を反転
-                                    self.get_logger().info(f"STEERING: raw={raw_val} normalized={steering_normalized:.3f} exponential={exponential_steering:.3f} angular.z={self.twist_msg.angular.z:.3f}")
+                                    self.get_logger().info(f"STEERING: raw={raw_val} normalized={steering_normalized:.3f} exponential={exponential_steering:.3f} angular.z={self.twist_msg.angular.z:.3f} (max={self.steering_max})")
                                     
                                 elif abs_event.event.code == ecodes.ABS_RZ:
                                     # ブレーキ: 0-255の範囲
@@ -129,11 +195,12 @@ class HundleNode(Node):
                                     self.update_linear_velocity()
                                         
                                 elif abs_event.event.code == ecodes.ABS_Z:
-                                    # スロットル: 0-255の範囲、逆転が必要
+                                    # スロットル: 設定された最大値を適用
                                     throttle_raw = raw_val
                                     if throttle_raw < 250:
-                                        self.throttle_value = (250 - throttle_raw) / 250.0 * self.linear_gain
-                                        self.get_logger().info(f"THROTTLE: raw={raw_val} normalized={self.throttle_value/self.linear_gain:.3f} throttle_value={self.throttle_value:.3f}")
+                                        throttle_normalized = (250 - throttle_raw) / 250.0
+                                        self.throttle_value = throttle_normalized * self.throttle_max
+                                        self.get_logger().info(f"THROTTLE: raw={raw_val} normalized={throttle_normalized:.3f} throttle_value={self.throttle_value:.3f} (max={self.throttle_max})")
                                     else:
                                         self.throttle_value = 0.0
                                     
@@ -141,12 +208,12 @@ class HundleNode(Node):
                                     self.update_linear_velocity()
                                     
                                 elif abs_event.event.code == ecodes.ABS_Y:
-                                    # リバース（Y軸）: 0-255の範囲
+                                    # リバース: 設定された最大値を適用
                                     reverse_raw = raw_val
                                     if reverse_raw < 240:  # リバースが押されている
                                         reverse_normalized = (240 - reverse_raw) / 240.0
-                                        self.reverse_value = -reverse_normalized * self.linear_gain  # 負の値
-                                        self.get_logger().info(f"REVERSE: raw={raw_val} normalized={reverse_normalized:.3f} reverse_value={self.reverse_value:.3f}")
+                                        self.reverse_value = -reverse_normalized * self.reverse_max  # 負の値
+                                        self.get_logger().info(f"REVERSE: raw={raw_val} normalized={reverse_normalized:.3f} reverse_value={self.reverse_value:.3f} (max={self.reverse_max})")
                                     else:  # リバースが離されている
                                         self.reverse_value = 0.0
                                     
@@ -176,6 +243,9 @@ class HundleNode(Node):
     def timer_callback(self):
         """定期的にTwistメッセージを送信"""
         self.publisher_.publish(self.twist_msg)
+        # 設定値も定期的にパブリッシュ
+        self.publish_config()
+        
         # デバッグ情報を定期的に出力（値が0でない場合のみ）
         if self.twist_msg.linear.x != 0.0 or self.twist_msg.angular.z != 0.0:
             self.get_logger().info(f"PUBLISHED: linear.x={self.twist_msg.linear.x:.3f}, angular.z={self.twist_msg.angular.z:.3f}")
