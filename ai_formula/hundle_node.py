@@ -208,11 +208,11 @@ class HundleNode(Node):
                                     self.update_linear_velocity()
                                     
                                 elif abs_event.event.code == ecodes.ABS_Y:
-                                    # リバース: 設定された最大値を適用
+                                    # リバース: 設定された最大値を適用（負の値として保存）
                                     reverse_raw = raw_val
                                     if reverse_raw < 240:  # リバースが押されている
                                         reverse_normalized = (240 - reverse_raw) / 240.0
-                                        self.reverse_value = -reverse_normalized * self.reverse_max  # 負の値
+                                        self.reverse_value = -reverse_normalized * self.reverse_max  # 負の値として保存
                                         self.get_logger().info(f"REVERSE: raw={raw_val} normalized={reverse_normalized:.3f} reverse_value={self.reverse_value:.3f} (max={self.reverse_max})")
                                     else:  # リバースが離されている
                                         self.reverse_value = 0.0
@@ -233,12 +233,16 @@ class HundleNode(Node):
         if self.brake_active:
             # ブレーキが踏まれている場合は停止
             self.twist_msg.linear.x = 0.0
-        elif self.reverse_value != 0.0:
-            # リバースが押されている場合は後進
-            self.twist_msg.linear.x = self.reverse_value
         else:
-            # 通常のスロットル操作
-            self.twist_msg.linear.x = self.throttle_value
+            # スロットルとリバースをベクトル的に足し算
+            # throttle_value は正の値、reverse_value は負の値
+            # 単純に足し算することで、同時に押された場合は相殺される
+            net_velocity = self.throttle_value + self.reverse_value
+            self.twist_msg.linear.x = net_velocity
+            
+            # デバッグ情報を出力
+            if self.throttle_value != 0.0 or self.reverse_value != 0.0:
+                self.get_logger().info(f"VELOCITY_CALC: throttle={self.throttle_value:.3f} reverse={self.reverse_value:.3f} net={net_velocity:.3f}")
     
     def timer_callback(self):
         """定期的にTwistメッセージを送信"""
